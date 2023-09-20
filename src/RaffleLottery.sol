@@ -1,8 +1,11 @@
 //SPDX-License-Identifier: MIT
 
 pragma solidity ^0.8.19;
+import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
+import {VRFConsumerBaseV2} from "@chainlink/contracts/src/v0.8/VRFConsumerBaseV2.sol";
+import {console} from "forge-std/console.sol";
 
-contract RaffleLottery {
+contract RaffleLottery is VRFConsumerBaseV2 {
     /** Errors */
     error RaffleLottery__InsufficientEntranceFee();
     error RaffleLottery__Fallback_CannotAcceptEth(string);
@@ -19,14 +22,20 @@ contract RaffleLottery {
     /** State Variables */
 
     uint256 private constant ENTRANCE_FEE = 0.01 ether;
+    uint16 private constant REQUEST_CONFIRMATIONS = 3;
+    uint32 private constant NUM_OF_WORDS = 1;
+
     uint256 private immutable i_lotteryOpenInterval;
     address private immutable i_owner;
+    VRFCoordinatorV2Interface private immutable i_vrfCoordinator;
+    bytes32 private immutable i_gasLane;
+    uint64 private immutable i_subscriptionId;
+    uint32 private immutable i_callbackGasLimit;
 
     uint256 private s_lotteryNewStartTime;
     address[] private s_participants;
     LotteryState private s_lotteryState;
-
-    //transfer donation to the deployer.. write a code
+    address private s_recentWinner;
 
     /** Events */
     event SomeoneDonated(address indexed funder, uint256 amount);
@@ -38,9 +47,20 @@ contract RaffleLottery {
     /** Functions */
 
     //constructor
-    constructor(uint256 _lotteryOpenInterval) {
+    constructor(
+        uint256 lotteryOpenInterval,
+        address vrfCoordinator,
+        bytes32 gasLane,
+        uint64 subscriptionId,
+        uint32 callbackGasLimit
+    ) VRFConsumerBaseV2(vrfCoordinator) {
         i_owner = msg.sender;
-        i_lotteryOpenInterval = _lotteryOpenInterval;
+        i_lotteryOpenInterval = lotteryOpenInterval;
+        i_vrfCoordinator = VRFCoordinatorV2Interface(vrfCoordinator);
+        i_gasLane = gasLane;
+        i_subscriptionId = subscriptionId;
+        i_callbackGasLimit = callbackGasLimit;
+
         s_lotteryState = LotteryState.OPEN;
         s_lotteryNewStartTime = block.timestamp;
     }
@@ -54,6 +74,7 @@ contract RaffleLottery {
 
     //public
     function enterRaffle() public payable {
+        console.log("interval: ", i_lotteryOpenInterval);
         if (
             block.timestamp - s_lotteryNewStartTime >= i_lotteryOpenInterval ||
             (s_lotteryState != LotteryState.OPEN)
@@ -69,21 +90,55 @@ contract RaffleLottery {
         emit NewParticipant(msg.sender);
     }
 
+    function fulfillRandomWords(
+        uint256 requestId,
+        uint256[] memory randomWords
+    ) internal override {
+        uint256 winnerIndex = randomWords[0] % s_participants.length;
+        s_recentWinner = s_participants[winnerIndex];
+    }
+
+    /**
+     * @dev This function calls the chainlink automation node to see if it's time to perform upkeep.
+     * The following should be true for this to return true:
+     * 1. The time interval has passed between raffle runs.
+     * 2. The raffle is in OPEN state.
+     * 3. The contract has ETH.
+     * 4. (Implicit)The subscription is funded with enough TEST LINKS.
+     */
+
+    function checkUpkeep(
+        bytes memory /*check data*/
+    ) public view returns (bool upKeepNeeded, bytes memory) {
+        bool timeHasPassed = block.timestamp - s_lotteryNewStartTime >=
+            i_lotteryOpenInterval;
+        bool isOpen = (s_lotteryState == RaffleLottery.LotteryState.OPEN);
+        bool hasBalance = address(this).balance > 0;
+        bool hasPlayers = s_participants.length > 0;
+        upKeepNeeded = (timeHasPassed && isOpen && hasBalance && hasPlayers);
+        return (upKeepNeeded, "0x0");
+    }
+
     //call this function automatically when time is up (function should be accessible by automation, so should be wither external or public)
     function pickAWinnerAndResetTheLottery() public {
-        address winner;
-        if (block.timestamp == s_lotteryNewStartTime + i_lotteryOpenInterval)
-            s_lotteryState = LotteryState.PICKING_WINNER;
+        s_lotteryState = LotteryState.PICKING_WINNER;
 
-        /* code to pick a random winner */
+        /* Picking a random winner */
+        uint256 s_requestId = i_vrfCoordinator.requestRandomWords(
+            i_gasLane, //gas lane
+            i_subscriptionId,
+            REQUEST_CONFIRMATIONS,
+            i_callbackGasLimit,
+            NUM_OF_WORDS
+        );
 
         /* tranferring prize money to the winner */
         uint256 prize = ENTRANCE_FEE * s_participants.length;
-        (bool sendSuccess, ) = payable(winner).call{value: prize}("");
+        (bool sendSuccess, ) = payable(s_recentWinner).call{value: prize}("");
         if (!sendSuccess) {
             revert RaffleLottery__PrizeTransferFailed();
         }
-        emit WinnerAnnounced(address(this), winner);
+        emit WinnerAnnounced(address(this), s_recentWinner);
 
         uint256 balance = address(this).balance;
         if (balance > 0) {
