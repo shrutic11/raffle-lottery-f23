@@ -11,6 +11,7 @@ contract RaffleLottery is VRFConsumerBaseV2 {
     error RaffleLottery__Fallback_CannotAcceptEth(string);
     error RaffleLottery__LotteryClosed();
     error RaffleLottery__PrizeTransferFailed();
+    error RaffleLottery__UpKeepNotNeeded(uint256, uint256, LotteryState);
 
     /** Enums */
     enum LotteryState {
@@ -74,7 +75,6 @@ contract RaffleLottery is VRFConsumerBaseV2 {
 
     //public
     function enterRaffle() public payable {
-        console.log("interval: ", i_lotteryOpenInterval);
         if (
             block.timestamp - s_lotteryNewStartTime >= i_lotteryOpenInterval ||
             (s_lotteryState != LotteryState.OPEN)
@@ -88,14 +88,6 @@ contract RaffleLottery is VRFConsumerBaseV2 {
         }
         s_participants.push(msg.sender);
         emit NewParticipant(msg.sender);
-    }
-
-    function fulfillRandomWords(
-        uint256 requestId,
-        uint256[] memory randomWords
-    ) internal override {
-        uint256 winnerIndex = randomWords[0] % s_participants.length;
-        s_recentWinner = s_participants[winnerIndex];
     }
 
     /**
@@ -119,8 +111,20 @@ contract RaffleLottery is VRFConsumerBaseV2 {
         return (upKeepNeeded, "0x0");
     }
 
-    //call this function automatically when time is up (function should be accessible by automation, so should be wither external or public)
+    function performUpkeep(bytes calldata /* perform data */) external {
+        (bool upkeepNeeded, ) = checkUpkeep("");
+        if (!upkeepNeeded) {
+            revert RaffleLottery__UpKeepNotNeeded(
+                address(this).balance,
+                s_participants.length,
+                s_lotteryState
+            );
+        }
+        pickAWinnerAndResetTheLottery();
+    }
+
     function pickAWinnerAndResetTheLottery() public {
+        /* Change the lottery state to PICKING WINNER */
         s_lotteryState = LotteryState.PICKING_WINNER;
 
         /* Picking a random winner */
@@ -151,6 +155,14 @@ contract RaffleLottery is VRFConsumerBaseV2 {
         s_lotteryNewStartTime = block.timestamp;
         s_lotteryState = LotteryState.OPEN;
         emit NewLotteryBegins(block.timestamp);
+    }
+
+    function fulfillRandomWords(
+        uint256 requestId,
+        uint256[] memory randomWords
+    ) internal override {
+        uint256 winnerIndex = randomWords[0] % s_participants.length;
+        s_recentWinner = s_participants[winnerIndex];
     }
 
     //** Getters and Setters */

@@ -21,6 +21,7 @@ contract RaffleLotteryTest is Test {
     bytes32 gasLane;
     uint64 subscriptionId;
     uint32 callbackGasLimit;
+    address link;
 
     /** Events */
     event SomeoneDonated(address indexed funder, uint256 amount);
@@ -37,9 +38,9 @@ contract RaffleLotteryTest is Test {
             vrfCoordinator,
             gasLane,
             subscriptionId,
-            callbackGasLimit
+            callbackGasLimit,
+            link
         ) = helperConfig.activeNetworkConfig();
-        console.log("interval in setup", lotteryOpenInterval);
         vm.deal(TEST_PLAYER, STARTING_BALANCE);
     }
 
@@ -54,7 +55,7 @@ contract RaffleLotteryTest is Test {
     ////////////////////////////
     // Raffle Lottery States  //
     ///////////////////////////
-    function testLotteryStateIsOpen() public view {
+    function testLotteryStateInitializesInOpenState() public view {
         assert(
             raffleLottery.getLotteryState() == RaffleLottery.LotteryState.OPEN
         );
@@ -68,7 +69,7 @@ contract RaffleLotteryTest is Test {
     // enterRaffleLottery  //
     /////////////////////////
 
-    function testUserCannotEnterWithoutPayingEnoughEntranceFee() public {
+    function testPlayerCannotEnterWithoutPayingEnoughEntranceFee() public {
         vm.prank(TEST_PLAYER);
         vm.expectRevert(
             RaffleLottery.RaffleLottery__InsufficientEntranceFee.selector
@@ -78,17 +79,29 @@ contract RaffleLotteryTest is Test {
 
     function testPlayerCannotEnterWhenTheTimeIntervalHasPassed() public {
         vm.warp(block.timestamp + raffleLottery.getLotteryOpenInterval() + 1);
+        vm.roll(block.number + 1);
+        vm.expectRevert(RaffleLottery.RaffleLottery__LotteryClosed.selector);
+        vm.prank(TEST_PLAYER);
+        raffleLottery.enterRaffle{value: ENTRANCE_FEE}();
+    }
+
+    function testPlayerCannotEnterWhenRaffleIsPickingWinner() public {
+        vm.prank(TEST_PLAYER);
+        raffleLottery.enterRaffle{value: ENTRANCE_FEE}();
+        vm.warp(block.timestamp + raffleLottery.getLotteryOpenInterval());
+        vm.roll(block.number + 1);
+        raffleLottery.performUpkeep("");
+
         vm.expectRevert(RaffleLottery.RaffleLottery__LotteryClosed.selector);
         vm.prank(TEST_PLAYER);
         raffleLottery.enterRaffle{value: ENTRANCE_FEE}();
     }
 
     function testPlayerCanEnterRaffleWithEntranceFee() public {
-        console.log("interval in test: ", lotteryOpenInterval);
         vm.prank(TEST_PLAYER);
 
-        // vm.expectEmit(address(raffleLottery));
-        //  emit NewParticipant(TEST_PLAYER);
+        vm.expectEmit(address(raffleLottery));
+        emit NewParticipant(TEST_PLAYER);
         raffleLottery.enterRaffle{value: ENTRANCE_FEE}();
 
         assertEq(raffleLottery.getParticipants()[0], TEST_PLAYER);
