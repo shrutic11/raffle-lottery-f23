@@ -37,6 +37,7 @@ contract RaffleLottery is VRFConsumerBaseV2 {
     address[] private s_participants;
     LotteryState private s_lotteryState;
     address private s_recentWinner;
+    uint256 private s_requestId;
 
     /** Events */
     event SomeoneDonated(address indexed funder, uint256 amount);
@@ -44,6 +45,7 @@ contract RaffleLottery is VRFConsumerBaseV2 {
     event WinnerAnnounced(address indexed lottery, address winner);
     event NewLotteryBegins(uint256);
     event RemainingBalanceTransferedToOwner(uint256);
+    event RequestedRandomWords(uint256);
 
     /** Functions */
 
@@ -120,22 +122,27 @@ contract RaffleLottery is VRFConsumerBaseV2 {
                 s_lotteryState
             );
         }
-        pickAWinnerAndResetTheLottery();
-    }
-
-    function pickAWinnerAndResetTheLottery() public {
         /* Change the lottery state to PICKING WINNER */
         s_lotteryState = LotteryState.PICKING_WINNER;
 
-        /* Picking a random winner */
-        uint256 s_requestId = i_vrfCoordinator.requestRandomWords(
+        //Sending request to VRFCoordinator
+        uint256 requestId = i_vrfCoordinator.requestRandomWords(
             i_gasLane, //gas lane
             i_subscriptionId,
             REQUEST_CONFIRMATIONS,
             i_callbackGasLimit,
             NUM_OF_WORDS
         );
+        emit RequestedRandomWords(requestId);
+        //Calculating the winner
+    }
 
+    function fulfillRandomWords(
+        uint256 /*requestId*/,
+        uint256[] memory randomWords
+    ) internal override {
+        uint256 winnerIndex = randomWords[0] % s_participants.length;
+        s_recentWinner = s_participants[winnerIndex];
         /* tranferring prize money to the winner */
         uint256 prize = ENTRANCE_FEE * s_participants.length;
         (bool sendSuccess, ) = payable(s_recentWinner).call{value: prize}("");
@@ -149,20 +156,11 @@ contract RaffleLottery is VRFConsumerBaseV2 {
             payable(i_owner).transfer(balance);
             emit RemainingBalanceTransferedToOwner(balance);
         }
-
         //Reset Lottery
         s_participants = new address[](0);
         s_lotteryNewStartTime = block.timestamp;
         s_lotteryState = LotteryState.OPEN;
         emit NewLotteryBegins(block.timestamp);
-    }
-
-    function fulfillRandomWords(
-        uint256 requestId,
-        uint256[] memory randomWords
-    ) internal override {
-        uint256 winnerIndex = randomWords[0] % s_participants.length;
-        s_recentWinner = s_participants[winnerIndex];
     }
 
     //** Getters and Setters */

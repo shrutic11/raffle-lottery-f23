@@ -88,7 +88,7 @@ contract RaffleLotteryTest is Test {
     function testPlayerCannotEnterWhenRaffleIsPickingWinner() public {
         vm.prank(TEST_PLAYER);
         raffleLottery.enterRaffle{value: ENTRANCE_FEE}();
-        vm.warp(block.timestamp + raffleLottery.getLotteryOpenInterval());
+        vm.warp(block.timestamp + raffleLottery.getLotteryOpenInterval() + 1);
         vm.roll(block.number + 1);
         raffleLottery.performUpkeep("");
 
@@ -116,4 +116,7 @@ contract RaffleLotteryTest is Test {
         emit SomeoneDonated(TEST_PLAYER, HIGHER_ENTRANCE_FEE - ENTRANCE_FEE);
         raffleLottery.enterRaffle{value: HIGHER_ENTRANCE_FEE}();
     }
+    /////////////////////////
+    // checkUpKeep         //
+    /////////////////////////
 }
