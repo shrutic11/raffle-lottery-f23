@@ -6,6 +6,7 @@ import {Test, console} from "forge-std/Test.sol";
 import {DeployRaffleLottery} from "../../script/DeployRaffleLottery.s.sol";
 import {RaffleLottery} from "../../src/RaffleLottery.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
+import {Vm} from "forge-std/Vm.sol";
 
 contract RaffleLotteryTest is Test {
     /** State Variables */
@@ -29,6 +30,7 @@ contract RaffleLotteryTest is Test {
     event WinnerAnnounced(address indexed lottery, address winner);
     event NewLotteryBegins(uint256);
     event RemainingBalanceTransferedToOwner(uint256);
+    event RequestedRandomWords(uint256 indexed requestId);
 
     function setUp() external {
         DeployRaffleLottery deployRaffle = new DeployRaffleLottery();
@@ -44,16 +46,16 @@ contract RaffleLotteryTest is Test {
         vm.deal(TEST_PLAYER, STARTING_BALANCE);
     }
 
-    ////////////////////////////
+    /////////////////////////////
     // State Variable Getters //
-    ///////////////////////////
+    ////////////////////////////
 
     function testGetEntranceFee() public {
         assertEq(raffleLottery.getEntranceFee(), ENTRANCE_FEE);
     }
 
     ////////////////////////////
-    // Raffle Lottery States  //
+    // Raffle Lottery States //
     ///////////////////////////
     function testLotteryStateInitializesInOpenState() public view {
         assert(
@@ -66,8 +68,8 @@ contract RaffleLotteryTest is Test {
     function testTheLotteryClosesAfterTheTimeInterval() public {} //after automation
 
     /////////////////////////
-    // enterRaffleLottery  //
-    /////////////////////////
+    // enterRaffleLottery //
+    ////////////////////////
 
     function testPlayerCannotEnterWithoutPayingEnoughEntranceFee() public {
         vm.prank(TEST_PLAYER);
@@ -77,15 +79,19 @@ contract RaffleLotteryTest is Test {
         raffleLottery.enterRaffle();
     }
 
-    function testPlayerCannotEnterWhenTheTimeIntervalHasPassed() public {
+    function testPlayerCannotEnterWhenTheTimeIntervalHasPassed()
+        public
+        PlayerEntersRaffle
+    {
         vm.warp(block.timestamp + raffleLottery.getLotteryOpenInterval() + 1);
         vm.roll(block.number + 1);
         vm.expectRevert(RaffleLottery.RaffleLottery__LotteryClosed.selector);
-        vm.prank(TEST_PLAYER);
-        raffleLottery.enterRaffle{value: ENTRANCE_FEE}();
     }
 
-    function testPlayerCannotEnterWhenRaffleIsPickingWinner() public {
+    function testPlayerCannotEnterWhenRaffleIsPickingWinner()
+        public
+        PlayerEntersRaffle
+    {
         vm.prank(TEST_PLAYER);
         raffleLottery.enterRaffle{value: ENTRANCE_FEE}();
         vm.warp(block.timestamp + raffleLottery.getLotteryOpenInterval() + 1);
@@ -93,8 +99,6 @@ contract RaffleLotteryTest is Test {
         raffleLottery.performUpkeep("");
 
         vm.expectRevert(RaffleLottery.RaffleLottery__LotteryClosed.selector);
-        vm.prank(TEST_PLAYER);
-        raffleLottery.enterRaffle{value: ENTRANCE_FEE}();
     }
 
     function testPlayerCanEnterRaffleWithEntranceFee() public {
@@ -116,7 +120,105 @@ contract RaffleLotteryTest is Test {
         emit SomeoneDonated(TEST_PLAYER, HIGHER_ENTRANCE_FEE - ENTRANCE_FEE);
         raffleLottery.enterRaffle{value: HIGHER_ENTRANCE_FEE}();
     }
+
     /////////////////////////
-    // checkUpKeep         //
+    // checkUpKeep        //
+    ////////////////////////
+
+    function testCheckUpKeepIsFalseWhen_TimeHasNotPassed() public {
+        vm.prank(TEST_PLAYER);
+        raffleLottery.enterRaffle{value: ENTRANCE_FEE}();
+
+        (bool upKeepNeeded, ) = raffleLottery.checkUpkeep("");
+
+        assert(!upKeepNeeded);
+    }
+
+    function testCheckUpKeepIsFalseWhen_RaffleIsNotOpen() public {
+        vm.prank(TEST_PLAYER);
+        raffleLottery.enterRaffle{value: ENTRANCE_FEE}();
+        vm.warp(block.timestamp + raffleLottery.getLotteryOpenInterval() + 1);
+        vm.roll(block.number + 1);
+        raffleLottery.performUpkeep("");
+        (bool upKeepNeeded, ) = raffleLottery.checkUpkeep("");
+
+        assert(!upKeepNeeded);
+    }
+
+    function testCheckUpKeepIsFalseWhen_RaffleHasNoPlayers() public {
+        vm.warp(block.timestamp + raffleLottery.getLotteryOpenInterval() + 1);
+        vm.roll(block.number + 1);
+        (bool upKeepNeeded, ) = raffleLottery.checkUpkeep("");
+
+        assert(!upKeepNeeded);
+    }
+
+    function testCheckUpKeepIsTrueWhenAllTheConditionsAreMet() public {
+        vm.prank(TEST_PLAYER);
+        raffleLottery.enterRaffle{value: ENTRANCE_FEE}();
+        vm.warp(block.timestamp + raffleLottery.getLotteryOpenInterval() + 1);
+        vm.roll(block.number + 1);
+
+        (bool upKeepNeeded, ) = raffleLottery.checkUpkeep("");
+        assert(upKeepNeeded);
+    }
+
     /////////////////////////
+    // performUpKeep      //
+    ////////////////////////
+
+    function testPerformUpkeepRevertsIfCheckUpkeepIsFalse() public {
+        uint256 balance = 0;
+        uint256 participants = 0;
+        uint256 raffleState = 0;
+        vm.warp(block.timestamp + raffleLottery.getLotteryOpenInterval() + 1);
+        vm.roll(block.number + 1);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RaffleLottery.RaffleLottery__UpKeepNotNeeded.selector,
+                balance,
+                participants,
+                raffleState
+            )
+        );
+        raffleLottery.performUpkeep("");
+    }
+
+    function testPerformUpKeepIsTriggeredWhenCheckUpKeepIsTrueAndTheRaffleStateUpdatesToPickingWinner()
+        public
+    {
+        vm.prank(TEST_PLAYER);
+        raffleLottery.enterRaffle{value: ENTRANCE_FEE}();
+        vm.warp(block.timestamp + raffleLottery.getLotteryOpenInterval() + 1);
+        vm.roll(block.number + 1);
+
+        raffleLottery.performUpkeep("");
+
+        assert(uint256(raffleLottery.getLotteryState()) == 1);
+    }
+
+    function testPerformUpKeepEmitsEventRequestedRandowWinner() public {
+        vm.prank(TEST_PLAYER);
+        raffleLottery.enterRaffle{value: ENTRANCE_FEE}();
+        vm.warp(block.timestamp + raffleLottery.getLotteryOpenInterval() + 1);
+        vm.roll(block.number + 1);
+
+        vm.recordLogs();
+        raffleLottery.performUpkeep("");
+
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+        bytes32 requestId = entries[1].topics[1];
+        assert(uint256(requestId) > 0);
+    }
+
+    modifier PlayerEntersRaffle() {
+        _;
+        vm.prank(TEST_PLAYER);
+        raffleLottery.enterRaffle{value: ENTRANCE_FEE}();
+    }
+
+    ////////////////////////////
+    // Fulfill Random words  //
+    ///////////////////////////
 }

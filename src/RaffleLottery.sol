@@ -45,7 +45,7 @@ contract RaffleLottery is VRFConsumerBaseV2 {
     event WinnerAnnounced(address indexed lottery, address winner);
     event NewLotteryBegins(uint256);
     event RemainingBalanceTransferedToOwner(uint256);
-    event RequestedRandomWords(uint256);
+    event RequestedRandomWords(uint256 indexed requestId);
 
     /** Functions */
 
